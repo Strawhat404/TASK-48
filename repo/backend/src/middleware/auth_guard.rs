@@ -118,12 +118,16 @@ impl<'r> FromRequest<'r> for AuthenticatedUser {
                                         "Account deactivated",
                                     ));
                                 }
+                                // Allow soft-deleted users to access cancel-deletion endpoint
                                 if soft_deleted_at.is_some() {
-                                    log::warn!("Auth denied: user {} is soft-deleted", claims.sub);
-                                    return Outcome::Error((
-                                        Status::Forbidden,
-                                        "Account scheduled for deletion",
-                                    ));
+                                    let uri = request.uri().path().as_str();
+                                    if uri != "/api/auth/cancel-deletion" {
+                                        log::warn!("Auth denied: user {} is soft-deleted", claims.sub);
+                                        return Outcome::Error((
+                                            Status::Forbidden,
+                                            "Account scheduled for deletion",
+                                        ));
+                                    }
                                 }
                                 role
                             }

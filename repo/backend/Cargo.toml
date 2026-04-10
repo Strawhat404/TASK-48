@@ -12,7 +12,7 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
 dotenv = { workspace = true }
-sqlx = { version = "0.7", features = ["runtime-tokio", "mysql", "chrono", "uuid"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "mysql", "chrono", "uuid", "rust_decimal"] }
 jsonwebtoken = "9"
 bcrypt = "0.15"
 tokio = { version = "1", features = ["full"] }

@@ -5,6 +5,7 @@ use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::State;
 use uuid::Uuid;
+use rust_decimal::Decimal;
 
 #[post("/", data = "<req>")]
 pub async fn create_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: Json<CreatePaymentRequest>) -> Result<Json<Payment>, Status> {
@@ -21,7 +22,7 @@ pub async fn create_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: 
     }
 
     // Idempotency check — if this key already exists, return the existing payment
-    let existing = sqlx::query_as::<_, (String, String, String, String, f64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
+    let existing = sqlx::query_as::<_, (String, String, String, String, rust_decimal::Decimal, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
         "SELECT id, order_id, idempotency_key, payment_method, amount, transaction_type, reference_payment_id, status, check_number, notes, processed_by, created_at, updated_at FROM payments WHERE idempotency_key = ?"
     )
     .bind(&req.idempotency_key)
@@ -31,7 +32,7 @@ pub async fn create_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: 
 
     if let Some((id, oid, ik, pm, amount, tt, rpi, status, cn, notes, pb, ca, ua)) = existing {
         return Ok(Json(Payment {
-            id, order_id: oid, idempotency_key: ik, payment_method: pm, amount,
+            id, order_id: oid, idempotency_key: ik, payment_method: pm, amount: amount.to_string().parse().unwrap_or(0.0),
             transaction_type: tt, reference_payment_id: rpi, status, check_number: cn,
             notes, processed_by: pb, created_at: ca, updated_at: ua,
         }));
@@ -91,19 +92,19 @@ pub async fn refund_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: 
 
     if let Some(existing_id) = existing {
         // Idempotent: return the existing refund payment (HTTP 200, not a double-charge)
-        let existing_row = sqlx::query_as::<_, (String, String, String, String, f64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
+        let existing_row = sqlx::query_as::<_, (String, String, String, String, rust_decimal::Decimal, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
             "SELECT id, order_id, idempotency_key, payment_method, amount, transaction_type, reference_payment_id, status, check_number, notes, processed_by, created_at, updated_at FROM payments WHERE id = ?"
         ).bind(&existing_id).fetch_one(pool.inner()).await.map_err(|e| { log::error!("refund_payment: select existing refund failed: {}", e); Status::InternalServerError })?;
         let (id, oid, ik, pm, amount, tt, rpi, status, cn, notes, pb, ca, ua) = existing_row;
         return Ok(Json(Payment {
-            id, order_id: oid, idempotency_key: ik, payment_method: pm, amount,
+            id, order_id: oid, idempotency_key: ik, payment_method: pm, amount: amount.to_string().parse().unwrap_or(0.0),
             transaction_type: tt, reference_payment_id: rpi, status, check_number: cn,
             notes, processed_by: pb, created_at: ca, updated_at: ua,
         }));
     }
 
     // Get original payment
-    let orig = sqlx::query_as::<_, (String, String, f64, String)>(
+    let orig = sqlx::query_as::<_, (String, String, rust_decimal::Decimal, String)>(
         "SELECT id, order_id, amount, status FROM payments WHERE id = ?"
     )
     .bind(&req.original_payment_id).fetch_optional(pool.inner()).await.map_err(|e| { log::error!("refund_payment: select original payment failed: {}", e); Status::InternalServerError })?;
@@ -113,7 +114,8 @@ pub async fn refund_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: 
             if orig_status != "completed" && orig_status != "held" {
                 return Err(Status::BadRequest);
             }
-            if req.amount > orig_amount {
+            let orig_amount_f64: f64 = orig_amount.to_string().parse().unwrap_or(0.0);
+            if req.amount > orig_amount_f64 {
                 return Err(Status::BadRequest);
             }
 
@@ -127,7 +129,7 @@ pub async fn refund_payment(pool: &State<DbPool>, user: AuthenticatedUser, req: 
             .execute(pool.inner()).await.map_err(|e| { log::error!("refund_payment: insert refund payment failed: {}", e); Status::InternalServerError })?;
 
             // Update order payment status
-            if (req.amount - orig_amount).abs() < 0.01 {
+            if (req.amount - orig_amount_f64).abs() < 0.01 {
                 sqlx::query("UPDATE orders SET payment_status = 'refunded', updated_at = NOW() WHERE id = ?")
                     .bind(&order_id).execute(pool.inner()).await.map_err(|e| { log::error!("refund_payment: update order status to refunded failed: {}", e); Status::InternalServerError })?;
             } else {
@@ -161,13 +163,13 @@ pub async fn list_payments(pool: &State<DbPool>, user: AuthenticatedUser, order_
         }
     }
 
-    let rows = sqlx::query_as::<_, (String, String, String, String, f64, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
+    let rows = sqlx::query_as::<_, (String, String, String, String, rust_decimal::Decimal, String, Option<String>, String, Option<String>, Option<String>, Option<String>, Option<chrono::NaiveDateTime>, Option<chrono::NaiveDateTime>)>(
         "SELECT id, order_id, idempotency_key, payment_method, amount, transaction_type, reference_payment_id, status, check_number, notes, processed_by, created_at, updated_at FROM payments WHERE order_id = ? ORDER BY created_at DESC"
     )
     .bind(&order_id).fetch_all(pool.inner()).await.map_err(|e| { log::error!("list_payments: select payments query failed: {}", e); Status::InternalServerError })?;
 
     let payments: Vec<Payment> = rows.into_iter().map(|(id, oid, ik, pm, amount, tt, rpi, status, cn, notes, pb, ca, ua)| {
-        Payment { id, order_id: oid, idempotency_key: ik, payment_method: pm, amount, transaction_type: tt, reference_payment_id: rpi, status, check_number: cn, notes, processed_by: pb, created_at: ca, updated_at: ua }
+        Payment { id, order_id: oid, idempotency_key: ik, payment_method: pm, amount: amount.to_string().parse().unwrap_or(0.0), transaction_type: tt, reference_payment_id: rpi, status, check_number: cn, notes, processed_by: pb, created_at: ca, updated_at: ua }
     }).collect();
 
     Ok(Json(payments))
