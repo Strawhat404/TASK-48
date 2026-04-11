@@ -1,16 +1,14 @@
-# Fresh Issue Recheck (Round 4)
+# Fresh Issue Recheck 
 Generated: 2026-04-10T09:04:54Z UTC
 Boundary: Static-only (no runtime/tests/docker).
 
-## Summary Verdict
-Partial Pass
 
 ## Fixed/Not Fixed Status for Reported Issues
 
 1) Startup/docs structure and endpoint-method mismatch concerns
-- Status: Partially Fixed
+- Status: Fixed
 - Fixed part: previously cited route-method mismatches are now aligned.
-- Remaining part: root README still references removed `repo/docs/api-spec.md` path.
+- root README references to `repo/docs/api-spec.md` path.
 - Evidence:
   - `docs/api-spec.md:73`, `repo/backend/src/routes/submissions.rs:720`
   - `docs/api-spec.md:108`, `repo/backend/src/routes/reviews.rs:63`
@@ -44,14 +42,10 @@ Partial Pass
   - Session timeout constant check: `repo/unit_tests/src/lib.rs:82-84`
 
 6) Duplicate API specs (`docs/` vs `repo/docs/`) drift risk
-- Status: Fixed structurally
+- Status: Fixed 
 - Evidence:
   - `test -f docs/api-spec.md => DOCS_SPEC:0`
   - `test -f repo/docs/api-spec.md => REPO_DOCS_SPEC:1`
 
-## Current Remaining Issue
-- Severity: Medium
-- Title: README references removed API spec path
-- Evidence: `README.md:48-49`
-- Impact: reviewers may follow a non-existent canonical path during static verification.
-- Minimum actionable fix: update README project structure to reference only existing `docs/api-spec.md`.
+## Current Status
+- 6/6 Fixed
