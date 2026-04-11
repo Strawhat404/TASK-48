@@ -1,5 +1,5 @@
 [workspace]
-members = ["backend", "frontend", "unit_tests", "API_tests"]
+members = ["backend", "frontend", "unit_tests", "API_tests", "frontend_tests"]
 resolver = "2"
 
 [workspace.dependencies]

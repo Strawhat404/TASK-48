@@ -9,14 +9,16 @@ COPY backend/Cargo.toml ./backend/
 COPY frontend/Cargo.toml ./frontend/
 COPY unit_tests/Cargo.toml ./unit_tests/
 COPY API_tests/Cargo.toml ./API_tests/
+COPY frontend_tests/Cargo.toml ./frontend_tests/
 
 # Create stub lib/main files so cargo can resolve the workspace without full source
-RUN mkdir -p backend/src frontend/src unit_tests/src API_tests/src \
+RUN mkdir -p backend/src frontend/src unit_tests/src API_tests/src frontend_tests/src \
     && echo 'fn main() {}' > backend/src/main.rs \
     && echo '' > backend/src/lib.rs \
     && echo 'fn main() {}' > frontend/src/main.rs \
     && echo '' > unit_tests/src/lib.rs \
-    && echo '' > API_tests/src/lib.rs
+    && echo '' > API_tests/src/lib.rs \
+    && echo '' > frontend_tests/src/lib.rs
 
 # Pre-fetch dependencies
 RUN cargo fetch

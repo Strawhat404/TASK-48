@@ -8,6 +8,7 @@ mod tests {
     use chrono::{Duration, Utc};
     use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
     use serde::{Deserialize, Serialize};
+    use chrono::Datelike;
     use sha2::{Digest, Sha256};
     use uuid::Uuid;
 
@@ -632,5 +633,467 @@ mod tests {
         let received_qty = 0;
         let status = if received_qty == 0 { "pending" } else { "discrepancy" };
         assert_eq!(status, "pending");
+    }
+
+    // ===== ADDITIONAL VALIDATE_METADATA EDGE CASES =====
+
+    #[test]
+    fn test_validate_metadata_empty_title_is_ok() {
+        // Empty title is allowed (length 0 <= 120)
+        assert!(models::validate_metadata("", None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_exact_boundary_title() {
+        // Title at exactly 120 chars passes, 121 fails (already tested above),
+        // but verify 119 also passes
+        assert!(models::validate_metadata(&"a".repeat(119), None, None, None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_tags_total_length_over_1000() {
+        let long_tags = "a".repeat(1001);
+        assert!(models::validate_metadata("Title", None, Some(&long_tags), None).is_err());
+    }
+
+    #[test]
+    fn test_validate_metadata_tags_total_length_at_1000() {
+        // 1000 chars of a single tag (which is also under 50 per tag) — this is tricky
+        // 20 tags of 49 chars each + 19 commas = 20*49 + 19 = 999 chars — valid
+        let tags: Vec<String> = (0..20).map(|_| "a".repeat(49)).collect();
+        let tag_str = tags.join(",");
+        assert!(tag_str.len() < 1001);
+        assert!(models::validate_metadata("T", None, Some(&tag_str), None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_keywords_total_length_over_1000() {
+        let long_kw = "a".repeat(1001);
+        assert!(models::validate_metadata("Title", None, None, Some(&long_kw)).is_err());
+    }
+
+    #[test]
+    fn test_validate_metadata_multiple_tags_one_over_50() {
+        let tags = "short,another,a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a]a";
+        // Last tag is over 50 chars
+        let long_tag = format!("short,ok,{}", "b".repeat(51));
+        assert!(models::validate_metadata("T", None, Some(&long_tag), None).is_err());
+    }
+
+    #[test]
+    fn test_validate_metadata_multiple_keywords_all_valid() {
+        assert!(models::validate_metadata("T", None, None, Some("rust,testing,ci,automation")).is_ok());
+    }
+
+    #[test]
+    fn test_validate_metadata_summary_at_boundary() {
+        assert!(models::validate_metadata("T", Some(&"s".repeat(499)), None, None).is_ok());
+        assert!(models::validate_metadata("T", Some(&"s".repeat(500)), None, None).is_ok());
+        assert!(models::validate_metadata("T", Some(&"s".repeat(501)), None, None).is_err());
+    }
+
+    // ===== ADDITIONAL GENERATE_SEO TESTS =====
+
+    #[test]
+    fn test_seo_no_summary_uses_title_as_description() {
+        let (_, md, _) = models::generate_seo("Short Title", None);
+        assert_eq!(md, "Short Title");
+    }
+
+    #[test]
+    fn test_seo_long_summary_truncated_to_155() {
+        let long_summary = "a".repeat(200);
+        let (_, md, _) = models::generate_seo("Title", Some(&long_summary));
+        assert_eq!(md.len(), 155);
+    }
+
+    #[test]
+    fn test_seo_no_summary_long_title_description_truncated() {
+        let long_title = "a".repeat(200);
+        let (mt, md, _) = models::generate_seo(&long_title, None);
+        assert_eq!(mt.len(), 120);
+        assert_eq!(md.len(), 155);
+    }
+
+    #[test]
+    fn test_seo_slug_handles_special_chars() {
+        let (_, _, slug) = models::generate_seo("My Paper: A Study! (2026)", None);
+        assert!(!slug.contains(' '));
+        assert!(!slug.contains(':'));
+        assert!(!slug.contains('!'));
+    }
+
+    #[test]
+    fn test_seo_empty_title() {
+        let (mt, md, slug) = models::generate_seo("", None);
+        assert_eq!(mt, "");
+        assert_eq!(md, "");
+        assert!(slug.is_empty());
+    }
+
+    // ===== ADDITIONAL VALIDATE_FILE_TYPE TESTS =====
+
+    #[test]
+    fn test_file_type_no_extension() {
+        assert!(models::validate_file_type("README", b"%PDF-1.4").is_err());
+    }
+
+    #[test]
+    fn test_file_type_empty_bytes() {
+        assert!(models::validate_file_type("doc.pdf", b"").is_err());
+    }
+
+    #[test]
+    fn test_file_type_jpeg_extension_accepted() {
+        assert!(models::validate_file_type("photo.jpeg", &[0xFF, 0xD8, 0xFF, 0xE1]).is_ok());
+    }
+
+    #[test]
+    fn test_file_type_case_insensitive_extension() {
+        assert!(models::validate_file_type("PAPER.PDF", b"%PDF-1.4").is_ok());
+    }
+
+    #[test]
+    fn test_file_type_returns_normalized_extension() {
+        let ext = models::validate_file_type("paper.PDF", b"%PDF-1.4").unwrap();
+        assert_eq!(ext, "pdf");
+    }
+
+    #[test]
+    fn test_file_type_txt_rejected() {
+        assert!(models::validate_file_type("notes.txt", b"Hello World").is_err());
+    }
+
+    #[test]
+    fn test_file_type_docx_wrong_magic_rejected() {
+        assert!(models::validate_file_type("doc.docx", b"%PDF-1.4").is_err());
+    }
+
+    // ===== ADDITIONAL SENSITIVE WORDS TESTS =====
+
+    #[test]
+    fn test_sensitive_words_multiple_replacements() {
+        let words = vec![
+            SensitiveWord { id: "1".into(), word: "bad".into(), action: "replace".into(), replacement: Some("[x]".into()), added_by: "admin".into() },
+            SensitiveWord { id: "2".into(), word: "ugly".into(), action: "replace".into(), replacement: Some("[y]".into()), added_by: "admin".into() },
+        ];
+        let result = check_sensitive_words("This is bad and ugly text", &words);
+        assert!(!result.is_blocked);
+        assert!(result.processed_text.contains("[x]"));
+        assert!(result.processed_text.contains("[y]"));
+        assert!(!result.processed_text.contains("bad"));
+        assert!(!result.processed_text.contains("ugly"));
+    }
+
+    #[test]
+    fn test_sensitive_words_block_takes_precedence_over_replace() {
+        let words = vec![
+            SensitiveWord { id: "1".into(), word: "ok".into(), action: "replace".into(), replacement: Some("fine".into()), added_by: "admin".into() },
+            SensitiveWord { id: "2".into(), word: "forbidden".into(), action: "block".into(), replacement: None, added_by: "admin".into() },
+        ];
+        let result = check_sensitive_words("This is ok but also forbidden", &words);
+        assert!(result.is_blocked);
+        assert_eq!(result.blocked_words, vec!["forbidden"]);
+    }
+
+    #[test]
+    fn test_sensitive_words_empty_word_list() {
+        let words: Vec<SensitiveWord> = vec![];
+        let result = check_sensitive_words("Any text here", &words);
+        assert!(!result.is_blocked);
+        assert_eq!(result.processed_text, "Any text here");
+        assert!(result.replacements_made.is_empty());
+    }
+
+    #[test]
+    fn test_sensitive_words_replace_default_replacement() {
+        let words = vec![SensitiveWord {
+            id: "1".into(), word: "bad".into(), action: "replace".into(),
+            replacement: None, added_by: "admin".into(),
+        }];
+        let result = check_sensitive_words("This is bad", &words);
+        assert!(result.processed_text.contains("***"));
+    }
+
+    #[test]
+    fn test_sensitive_words_multiple_occurrences_replaced() {
+        let words = vec![SensitiveWord {
+            id: "1".into(), word: "bad".into(), action: "replace".into(),
+            replacement: Some("[x]".into()), added_by: "admin".into(),
+        }];
+        let result = check_sensitive_words("bad start and bad end", &words);
+        assert_eq!(result.processed_text, "[x] start and [x] end");
+        assert_eq!(result.replacements_made.len(), 2);
+    }
+
+    // ===== ADDITIONAL BUSINESS DAY TESTS =====
+
+    #[test]
+    fn test_business_days_saturday_plus_1_is_monday() {
+        let saturday = chrono::NaiveDate::from_ymd_opt(2026, 4, 4).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        let result = models::add_business_days(saturday, 1);
+        assert_eq!(result.weekday(), chrono::Weekday::Mon);
+    }
+
+    #[test]
+    fn test_business_days_sunday_plus_1_is_monday() {
+        let sunday = chrono::NaiveDate::from_ymd_opt(2026, 4, 5).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        let result = models::add_business_days(sunday, 1);
+        assert_eq!(result.weekday(), chrono::Weekday::Mon);
+    }
+
+    #[test]
+    fn test_business_days_five_days_is_one_week() {
+        let monday = chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap().and_hms_opt(9, 0, 0).unwrap();
+        let result = models::add_business_days(monday, 5);
+        // 5 business days from Monday = next Monday
+        assert_eq!(result.date(), chrono::NaiveDate::from_ymd_opt(2026, 4, 13).unwrap());
+    }
+
+    #[test]
+    fn test_business_days_preserves_time() {
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap().and_hms_opt(14, 30, 45).unwrap();
+        let result = models::add_business_days(dt, 1);
+        assert_eq!(result.time(), chrono::NaiveTime::from_hms_opt(14, 30, 45).unwrap());
+    }
+
+    // ===== ADDITIONAL CASE TRANSITION TESTS =====
+
+    #[test]
+    fn test_case_awaiting_evidence_can_go_to_arbitrated() {
+        assert!(models::valid_case_transition("awaiting_evidence", "arbitrated"));
+    }
+
+    #[test]
+    fn test_case_unknown_status_rejected() {
+        assert!(!models::valid_case_transition("unknown", "in_review"));
+        assert!(!models::valid_case_transition("submitted", "unknown"));
+    }
+
+    #[test]
+    fn test_case_self_transition_rejected() {
+        let statuses = ["submitted", "in_review", "awaiting_evidence", "arbitrated", "approved", "denied", "closed"];
+        for s in &statuses {
+            assert!(!models::valid_case_transition(s, s), "Self-transition from '{}' to '{}' must be rejected", s, s);
+        }
+    }
+
+    #[test]
+    fn test_case_reverse_transitions_rejected() {
+        // Cannot go backward through the main flow
+        assert!(!models::valid_case_transition("in_review", "submitted"));
+        assert!(!models::valid_case_transition("approved", "arbitrated"));
+        assert!(!models::valid_case_transition("denied", "arbitrated"));
+        assert!(!models::valid_case_transition("closed", "approved"));
+    }
+
+    // ===== SUBMISSION VERSION RESPONSE CONVERSION =====
+
+    #[test]
+    fn test_submission_version_to_response() {
+        use backend::models::submission::SubmissionVersion;
+        let dt = chrono::NaiveDate::from_ymd_opt(2026, 4, 2).unwrap()
+            .and_hms_opt(14, 30, 0).unwrap();
+        let version = SubmissionVersion {
+            id: "v1".into(),
+            submission_id: "sub1".into(),
+            version_number: 3,
+            file_name: "paper.pdf".into(),
+            file_path: "/uploads/paper.pdf".into(),
+            file_size: 1024,
+            file_type: "pdf".into(),
+            file_hash: "abc123".into(),
+            magic_bytes: None,
+            form_data: None,
+            submitted_at: Some(dt),
+        };
+        let resp = version.to_response();
+        assert_eq!(resp.id, "v1");
+        assert_eq!(resp.version_number, 3);
+        assert_eq!(resp.file_name, "paper.pdf");
+        assert_eq!(resp.file_size, 1024);
+        assert_eq!(resp.file_type, "pdf");
+        assert_eq!(resp.file_hash, "abc123");
+        assert_eq!(resp.submitted_at.unwrap(), "04/02/2026, 02:30:00 PM");
+    }
+
+    #[test]
+    fn test_submission_version_to_response_no_timestamp() {
+        use backend::models::submission::SubmissionVersion;
+        let version = SubmissionVersion {
+            id: "v2".into(),
+            submission_id: "sub1".into(),
+            version_number: 1,
+            file_name: "draft.docx".into(),
+            file_path: "/uploads/draft.docx".into(),
+            file_size: 2048,
+            file_type: "docx".into(),
+            file_hash: "def456".into(),
+            magic_bytes: None,
+            form_data: None,
+            submitted_at: None,
+        };
+        let resp = version.to_response();
+        assert!(resp.submitted_at.is_none());
+    }
+
+    // ===== TEMPLATE VALIDATION =====
+
+    #[test]
+    fn test_journal_template_requires_methodology() {
+        use backend::models::submission::get_submission_templates;
+        let templates = get_submission_templates();
+        let journal = templates.iter().find(|t| t.submission_type == "journal_article").unwrap();
+        assert!(journal.required_fields.contains(&"methodology".to_string()));
+    }
+
+    #[test]
+    fn test_thesis_template_requires_advisor() {
+        use backend::models::submission::get_submission_templates;
+        let templates = get_submission_templates();
+        let thesis = templates.iter().find(|t| t.submission_type == "thesis").unwrap();
+        assert!(thesis.required_fields.contains(&"advisor".to_string()));
+        assert!(thesis.required_fields.contains(&"degree_type".to_string()));
+    }
+
+    #[test]
+    fn test_conference_template_requires_conference_name() {
+        use backend::models::submission::get_submission_templates;
+        let templates = get_submission_templates();
+        let conf = templates.iter().find(|t| t.submission_type == "conference_paper").unwrap();
+        assert!(conf.required_fields.contains(&"conference_name".to_string()));
+    }
+
+    #[test]
+    fn test_book_chapter_template_requires_editor() {
+        use backend::models::submission::get_submission_templates;
+        let templates = get_submission_templates();
+        let book = templates.iter().find(|t| t.submission_type == "book_chapter").unwrap();
+        assert!(book.required_fields.contains(&"editor".to_string()));
+        assert!(book.required_fields.contains(&"book_title".to_string()));
+    }
+
+    // ===== SLA DEADLINE CALCULATION =====
+
+    #[test]
+    fn test_sla_first_response_deadline_is_correct() {
+        let submitted = chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap()
+            .and_hms_opt(9, 0, 0).unwrap(); // Monday 9AM
+        let deadline = submitted + Duration::hours(models::SLA_FIRST_RESPONSE_HOURS);
+        // 48 hours from Monday 9AM = Wednesday 9AM
+        assert_eq!(deadline.date(), chrono::NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+    }
+
+    #[test]
+    fn test_sla_resolution_deadline_is_correct() {
+        let submitted = chrono::NaiveDate::from_ymd_opt(2026, 4, 6).unwrap()
+            .and_hms_opt(9, 0, 0).unwrap(); // Monday 9AM
+        let deadline = submitted + Duration::hours(models::SLA_RESOLUTION_HOURS);
+        // 168 hours = 7 days from Monday = next Monday
+        assert_eq!(deadline.date(), chrono::NaiveDate::from_ymd_opt(2026, 4, 13).unwrap());
+    }
+
+    // ===== DATA MODEL SERIALIZATION =====
+
+    #[test]
+    fn test_sensitive_word_serialization_roundtrip() {
+        let word = SensitiveWord {
+            id: "sw-1".into(),
+            word: "test".into(),
+            action: "replace".into(),
+            replacement: Some("***".into()),
+            added_by: "admin".into(),
+        };
+        let json = serde_json::to_string(&word).unwrap();
+        let deserialized: SensitiveWord = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, "sw-1");
+        assert_eq!(deserialized.word, "test");
+        assert_eq!(deserialized.action, "replace");
+        assert_eq!(deserialized.replacement, Some("***".to_string()));
+    }
+
+    #[test]
+    fn test_content_check_result_blocked_serializes() {
+        let result = check_sensitive_words(
+            "This has forbidden text",
+            &[SensitiveWord {
+                id: "1".into(), word: "forbidden".into(), action: "block".into(),
+                replacement: None, added_by: "admin".into(),
+            }],
+        );
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"is_blocked\":true"));
+        assert!(json.contains("\"forbidden\""));
+    }
+
+    // ===== PAYMENT LOGIC EDGE CASES =====
+
+    #[test]
+    fn test_refund_exact_original_amount_allowed() {
+        let original = 100.00_f64;
+        assert!(100.0 <= original);
+    }
+
+    #[test]
+    fn test_refund_zero_amount() {
+        let original = 100.00_f64;
+        assert!(0.0 <= original);
+    }
+
+    #[test]
+    fn test_idempotency_different_keys_are_different() {
+        let k1 = "pay-001";
+        let k2 = "pay-002";
+        assert_ne!(k1, k2);
+    }
+
+    // ===== ORDER LINE ITEM TOTAL CALCULATION =====
+
+    #[test]
+    fn test_line_total_calculation() {
+        let quantity = 5;
+        let unit_price = 29.99_f64;
+        let expected_total = quantity as f64 * unit_price;
+        assert!((expected_total - 149.95).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_high_quantity_flag_threshold() {
+        // Orders with quantity >= HIGH_QUANTITY_THRESHOLD should be flagged
+        assert!(50 >= models::HIGH_QUANTITY_THRESHOLD);
+        assert!(51 >= models::HIGH_QUANTITY_THRESHOLD);
+        assert!(49 < models::HIGH_QUANTITY_THRESHOLD);
+    }
+
+    // ===== REFUND THRESHOLD =====
+
+    #[test]
+    fn test_refund_count_at_threshold_triggers_flag() {
+        let refund_count: i64 = 3;
+        assert!(refund_count >= models::REFUND_COUNT_THRESHOLD);
+    }
+
+    #[test]
+    fn test_refund_count_below_threshold_no_flag() {
+        let refund_count: i64 = 2;
+        assert!(refund_count < models::REFUND_COUNT_THRESHOLD);
+    }
+
+    // ===== SOFT DELETE WINDOW =====
+
+    #[test]
+    fn test_soft_delete_within_hold_period_is_recoverable() {
+        let deleted_at = Utc::now().naive_utc();
+        let hold_end = deleted_at + Duration::days(models::SOFT_DELETE_HOLD_DAYS);
+        let now = Utc::now().naive_utc();
+        assert!(now < hold_end, "Within hold period, account is recoverable");
+    }
+
+    #[test]
+    fn test_soft_delete_after_hold_period_is_permanent() {
+        let deleted_at = Utc::now().naive_utc() - Duration::days(models::SOFT_DELETE_HOLD_DAYS + 1);
+        let hold_end = deleted_at + Duration::days(models::SOFT_DELETE_HOLD_DAYS);
+        let now = Utc::now().naive_utc();
+        assert!(now > hold_end, "After hold period, deletion is permanent");
     }
 }

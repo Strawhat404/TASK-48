@@ -58,6 +58,17 @@ fi
 
 echo ""
 echo "-----------------------------------------"
+echo "  Running frontend tests (frontend_tests crate)"
+echo "-----------------------------------------"
+if $RUN_CARGO test -p frontend_tests -- --nocapture 2>&1; then
+    echo "  ✓ Frontend tests PASSED"
+else
+    echo "  ✗ Frontend tests FAILED"
+    FAILED=1
+fi
+
+echo ""
+echo "-----------------------------------------"
 echo "  Running API/integration tests (API_tests crate)"
 echo "-----------------------------------------"
 if $RUN_CARGO test -p API_tests -- --nocapture 2>&1; then
