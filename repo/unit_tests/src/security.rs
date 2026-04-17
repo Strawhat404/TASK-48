@@ -349,9 +349,11 @@ mod tests {
         };
         let token = encode(&Header::default(), &claims,
             &EncodingKey::from_secret(secret.as_bytes())).unwrap();
+        let mut validation = Validation::default();
+        validation.leeway = 0;
         assert!(decode::<Claims>(&token,
             &DecodingKey::from_secret(secret.as_bytes()),
-            &Validation::default()).is_err());
+            &validation).is_err());
     }
 
     // ===== BCRYPT COST PARAMETER =====

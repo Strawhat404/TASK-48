@@ -232,8 +232,12 @@ pub async fn delete_address(pool: &State<DbPool>, auth: AuthenticatedUser, addre
     .fetch_optional(pool.inner()).await
     .map_err(|e| { log::error!("delete_address: default check failed: {}", e); Status::InternalServerError })?;
 
-    sqlx::query("DELETE FROM user_addresses WHERE id = ? AND user_id = ?")
+    let result = sqlx::query("DELETE FROM user_addresses WHERE id = ? AND user_id = ?")
         .bind(&address_id).bind(&auth.user_id).execute(pool.inner()).await.map_err(|e| { log::error!("delete_address: delete address failed: {}", e); Status::InternalServerError })?;
+
+    if result.rows_affected() == 0 {
+        return Err(Status::NotFound);
+    }
 
     // If we deleted the default, promote the most recently created remaining address
     if was_default == Some(true) {

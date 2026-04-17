@@ -405,8 +405,8 @@ pub async fn export_my_data(pool: &State<DbPool>, user: AuthenticatedUser) -> Re
     }).collect();
 
     // Orders
-    let ords = sqlx::query_as::<_, (String, String, String, String, f64)>(
-        "SELECT id, order_number, subscription_period, status, total_amount FROM orders WHERE user_id = ?"
+    let ords = sqlx::query_as::<_, (String, String, String, String, String)>(
+        "SELECT id, order_number, subscription_period, status, CAST(total_amount AS CHAR) FROM orders WHERE user_id = ?"
     )
     .bind(&user.user_id)
     .fetch_all(pool.inner())
